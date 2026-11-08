@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Camera Capture</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app">
+    <h1>Camera Capture</h1>
+
+    <div class="field">
+      <label for="deviceSelect">Video source</label>
+      <select id="deviceSelect" disabled>
+        <option>Loading devices…</option>
+      </select>
+    </div>
+
+    <div class="camera-container">
+      <video id="video" autoplay playsinline muted></video>
+      <div id="flash" class="flash"></div>
+      <p id="placeholder" class="placeholder">Waiting for camera…</p>
+    </div>
+
+    <div class="actions">
+      <button id="snapshotBtn" type="button" disabled>Take Snapshot</button>
+      <span class="hint">or press <kbd>Space</kbd> / <kbd>Enter</kbd></span>
+    </div>
+
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+
+    <canvas id="canvas" hidden></canvas>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

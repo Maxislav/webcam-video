@@ -1,0 +1,24 @@
+{
+  "name": "webcam-video",
+  "version": "1.0.0",
+  "description": "Camera capture web app: live preview, device selection, snapshot upload",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:client": "tsc -p public/tsconfig.json",
+    "build:server": "tsc -p tsconfig.json",
+    "build": "npm run build:client && npm run build:server",
+    "dev": "npm run build:client && tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p public/tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
