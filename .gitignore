@@ -3,3 +3,6 @@ dist/
 uploads/*
 !uploads/.gitkeep
 public/app.js
+
+# CodeMie analytics
+docs/codemie/analytics/

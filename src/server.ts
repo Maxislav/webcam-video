@@ -1,5 +1,4 @@
 import express, { type NextFunction, type Request, type Response } from "express";
-import { randomBytes } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -39,6 +38,28 @@ async function analyzeSnapshot(
   return null;
 }
 
+// YYYY-MM-DD_HH-mm-ss in server local time.
+function timestampName(date: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}` +
+    `_${p(date.getHours())}-${p(date.getMinutes())}-${p(date.getSeconds())}`
+  );
+}
+
+// Never overwrites: two snapshots within one second get -1, -2, ... suffixes.
+async function writeUniqueFile(base: string, ext: string, data: Buffer): Promise<string> {
+  for (let attempt = 0; ; attempt++) {
+    const filename = `${base}${attempt === 0 ? "" : `-${attempt}`}.${ext}`;
+    try {
+      await writeFile(path.join(UPLOADS_DIR, filename), data, { flag: "wx" });
+      return filename;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+  }
+}
+
 async function uploadSnapshot(req: Request, res: Response): Promise<void> {
   const image: unknown = req.body?.image;
   if (typeof image !== "string") {
@@ -59,11 +80,8 @@ async function uploadSnapshot(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const filename = `snapshot-${stamp}-${randomBytes(3).toString("hex")}.${EXTENSIONS[mime]}`;
-
   await mkdir(UPLOADS_DIR, { recursive: true });
-  await writeFile(path.join(UPLOADS_DIR, filename), buffer);
+  const filename = await writeUniqueFile(timestampName(new Date()), EXTENSIONS[mime], buffer);
 
   const saved: SnapshotResult = {
     filename,

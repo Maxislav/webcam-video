@@ -19,12 +19,16 @@
 
     <div class="camera-container">
       <video id="video" autoplay playsinline muted></video>
+      <div id="selection" class="selection" hidden></div>
+      <div id="selectLayer" class="select-layer"></div>
       <div id="flash" class="flash"></div>
       <p id="placeholder" class="placeholder">Waiting for camera…</p>
     </div>
 
     <div class="actions">
       <button id="snapshotBtn" type="button" disabled>Take Snapshot</button>
+      <button id="selectBtn" type="button" class="secondary" disabled>Select area</button>
+      <button id="resetBtn" type="button" class="secondary" hidden>Reset area</button>
       <span class="hint">or press <kbd>Space</kbd> / <kbd>Enter</kbd></span>
     </div>
 
