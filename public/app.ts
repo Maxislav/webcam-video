@@ -5,6 +5,7 @@ const snapshotBtn = document.getElementById("snapshotBtn") as HTMLButtonElement;
 const statusEl = document.getElementById("status") as HTMLParagraphElement;
 const placeholder = document.getElementById("placeholder") as HTMLParagraphElement;
 const flash = document.getElementById("flash") as HTMLDivElement;
+const analysisEl = document.getElementById("analysis") as HTMLDivElement;
 
 const container = document.querySelector(".camera-container") as HTMLDivElement;
 const selectBtn = document.getElementById("selectBtn") as HTMLButtonElement;
@@ -267,7 +268,9 @@ async function takeSnapshot(): Promise<void> {
     canvas.getContext("2d")!.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
     const image = canvas.toDataURL("image/jpeg", 0.92);
 
-    setStatus("Uploading snapshot…", "loading");
+    analysisEl.hidden = true;
+    analysisEl.textContent = "";
+    setStatus("Uploading and analyzing…", "loading");
     const response = await fetch("/api/upload-snapshot", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -276,7 +279,16 @@ async function takeSnapshot(): Promise<void> {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error ?? `Upload failed (${response.status})`);
 
-    setStatus(`Saved ${data.filename} (${Math.round(data.bytes / 1024)} KB)`, "success");
+    const saved = `Saved ${data.filename} (${Math.round(data.bytes / 1024)} KB)`;
+    if (data.analysisError) {
+      setStatus(`${saved}. ${data.analysisError}`, "error");
+    } else {
+      setStatus(saved, "success");
+    }
+    if (data.analysis?.text) {
+      analysisEl.textContent = data.analysis.text;
+      analysisEl.hidden = false;
+    }
   } catch (err) {
     setStatus(err instanceof Error ? err.message : "Upload failed", "error");
   } finally {

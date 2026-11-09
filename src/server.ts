@@ -2,7 +2,17 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+try {
+  process.loadEnvFile();
+} catch {
+  // No .env file (or Node too old for loadEnvFile); rely on the real environment.
+}
+
 const PORT = Number(process.env.PORT ?? 3000);
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+const ANALYSIS_PROMPT = "Опиши, что на изображении.";
+const ANALYSIS_TIMEOUT_MS = 30_000;
 const ROOT_DIR = path.resolve(import.meta.dirname, "..");
 const UPLOADS_DIR = path.join(ROOT_DIR, "uploads");
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
@@ -21,21 +31,51 @@ interface SnapshotResult {
   bytes: number;
 }
 
+interface Analysis {
+  text: string;
+  model: string;
+}
+
 /**
- * Placeholder for future AI integration.
- *
- * Called after a snapshot has been saved to disk. Insert the AI API request
- * here, e.g. read the file (or use `imageBuffer`), send it to your provider,
- * and return the analysis so it can be included in the HTTP response.
+ * Sends the saved snapshot to OpenAI (vision) and returns the model's description.
+ * Returns null when OPENAI_API_KEY is not set. Throws on API errors.
  */
-async function analyzeSnapshot(
-  _imageBuffer: Buffer,
-  _saved: SnapshotResult,
-): Promise<unknown | null> {
-  // TODO: AI API request goes here.
-  //   const response = await aiClient.analyze({ image: _imageBuffer.toString("base64") });
-  //   return response;
-  return null;
+async function analyzeSnapshot(imageBuffer: Buffer, mime: string): Promise<Analysis | null> {
+  if (!OPENAI_API_KEY) return null;
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: ANALYSIS_PROMPT },
+            {
+              type: "image_url",
+              image_url: { url: `data:${mime};base64,${imageBuffer.toString("base64")}` },
+            },
+          ],
+        },
+      ],
+    }),
+    signal: AbortSignal.timeout(ANALYSIS_TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as { error?: { message?: string } } | null;
+    throw new Error(`OpenAI ${response.status}: ${body?.error?.message ?? response.statusText}`);
+  }
+
+  const data = (await response.json()) as { choices?: { message?: { content?: string } }[] };
+  const text = data.choices?.[0]?.message?.content?.trim();
+  if (!text) throw new Error("OpenAI returned an empty response");
+  return { text, model: OPENAI_MODEL };
 }
 
 // YYYY-MM-DD_HH-mm-ss in server local time.
@@ -89,9 +129,18 @@ async function uploadSnapshot(req: Request, res: Response): Promise<void> {
     bytes: buffer.length,
   };
 
-  const analysis = await analyzeSnapshot(buffer, saved);
+  // The snapshot is already saved, so an analysis failure must not fail the upload.
+  // Details stay in the server log; OpenAI error messages can echo part of the API key.
+  let analysis: Analysis | null = null;
+  let analysisError: string | undefined;
+  try {
+    analysis = await analyzeSnapshot(buffer, mime);
+  } catch (err) {
+    console.error("Snapshot analysis failed:", err);
+    analysisError = "Analysis failed (see server log for details)";
+  }
 
-  res.status(201).json({ ...saved, analysis });
+  res.status(201).json({ ...saved, analysis, ...(analysisError && { analysisError }) });
 }
 
 const app = express();

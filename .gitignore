@@ -6,3 +6,5 @@ public/app.js
 
 # CodeMie analytics
 docs/codemie/analytics/
+
+.env

@@ -35,11 +35,23 @@ npm start
 
 ## Configuration
 
-| Variable | Default | Description         |
-| -------- | ------- | ------------------- |
-| `PORT`   | `3000`  | Port the server uses |
+| Variable         | Default       | Description                                                     |
+| ---------------- | ------------- | --------------------------------------------------------------- |
+| `PORT`           | `3000`        | Port the server uses                                            |
+| `OPENAI_API_KEY` | (unset)       | Enables image analysis with OpenAI; without it nothing is sent  |
+| `OPENAI_MODEL`   | `gpt-4o-mini` | Vision-capable OpenAI model used for analysis                   |
 
 Example: `PORT=8080 npm start`
+
+Variables can also be put in a `.env` file in the project root (it is gitignored), e.g. `OPENAI_API_KEY=sk-...`. Restart the server after changing it.
+
+## Image analysis (OpenAI)
+
+When `OPENAI_API_KEY` is set, every saved snapshot (already cropped to the selected area) is sent to the OpenAI API with the prompt "Describe what is in the image", and the answer is shown under the preview. The prompt is the `ANALYSIS_PROMPT` constant in `src/server.ts`.
+
+- You need an API key from <https://platform.openai.com/api-keys>. API usage is billed separately; a ChatGPT Plus/Pro subscription does not include it.
+- The image leaves your machine and goes to OpenAI. Do not enable this for sensitive scenes.
+- If the analysis fails (bad key, network, timeout), the snapshot is still saved and the status line reports the error; details are in the server log.
 
 ## Usage
 
@@ -57,9 +69,9 @@ Example: `PORT=8080 npm start`
 { "image": "data:image/jpeg;base64,..." }
 ```
 
-Accepts jpeg, png or webp data URLs. Returns `201` with `{ filename, path, bytes, analysis }`, or `400` with `{ error }` for invalid input.
+Accepts jpeg, png or webp data URLs. Returns `201` with `{ filename, path, bytes, analysis, analysisError? }`, or `400` with `{ error }` for invalid input.
 
-The `analysis` field is `null` for now. To add AI processing, implement `analyzeSnapshot()` in `src/server.ts`.
+`analysis` is `{ text, model }` when OpenAI analysis is enabled and succeeded, otherwise `null`. If it was enabled but failed, `analysisError` holds a short message (the file is saved anyway).
 
 ## Scripts
 

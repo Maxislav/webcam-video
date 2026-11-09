@@ -231,6 +231,20 @@ kbd {
   color: var(--error);
 }
 
+.analysis {
+  margin-top: 12px;
+  padding: 12px 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.analysis[hidden] {
+  display: none;
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
