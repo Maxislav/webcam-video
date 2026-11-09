@@ -1,5 +1,5 @@
 import express, { type NextFunction, type Request, type Response } from "express";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 try {
@@ -11,11 +11,12 @@ try {
 const PORT = Number(process.env.PORT ?? 3000);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
-const ANALYSIS_PROMPT = "Опиши, что на изображении.";
+const DEFAULT_PROMPT = "Describe what is in the image.";
 const ANALYSIS_TIMEOUT_MS = 30_000;
 const ROOT_DIR = path.resolve(import.meta.dirname, "..");
 const UPLOADS_DIR = path.join(ROOT_DIR, "uploads");
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
+const PROMPT_FILE = path.join(ROOT_DIR, "prompt.txt");
 
 const EXTENSIONS: Record<string, string> = {
   "image/jpeg": "jpg",
@@ -36,6 +37,17 @@ interface Analysis {
   model: string;
 }
 
+// Read on every request so edits to prompt.txt apply without restarting the server.
+async function readPrompt(): Promise<string> {
+  try {
+    const text = (await readFile(PROMPT_FILE, "utf8")).trim();
+    if (text) return text;
+  } catch {
+    // Missing or unreadable file: fall back to the default prompt.
+  }
+  return DEFAULT_PROMPT;
+}
+
 /**
  * Sends the saved snapshot to OpenAI (vision) and returns the model's description.
  * Returns null when OPENAI_API_KEY is not set. Throws on API errors.
@@ -43,6 +55,7 @@ interface Analysis {
 async function analyzeSnapshot(imageBuffer: Buffer, mime: string): Promise<Analysis | null> {
   if (!OPENAI_API_KEY) return null;
 
+  const prompt = await readPrompt();
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -55,7 +68,7 @@ async function analyzeSnapshot(imageBuffer: Buffer, mime: string): Promise<Analy
         {
           role: "user",
           content: [
-            { type: "text", text: ANALYSIS_PROMPT },
+            { type: "text", text: prompt },
             {
               type: "image_url",
               image_url: { url: `data:${mime};base64,${imageBuffer.toString("base64")}` },

@@ -47,7 +47,7 @@ Variables can also be put in a `.env` file in the project root (it is gitignored
 
 ## Image analysis (OpenAI)
 
-When `OPENAI_API_KEY` is set, every saved snapshot (already cropped to the selected area) is sent to the OpenAI API with the prompt "Describe what is in the image", and the answer is shown under the preview. The prompt is the `ANALYSIS_PROMPT` constant in `src/server.ts`.
+When `OPENAI_API_KEY` is set, every saved snapshot (already cropped to the selected area) is sent to the OpenAI API together with the prompt from `prompt.txt`, and the answer is shown under the preview. Edit `prompt.txt` to change what the model is asked (e.g. "Count the people in the image" or "Read the text on the sign"); it is re-read on every snapshot, so no restart is needed. If the file is missing or empty, a default "describe the image" prompt is used.
 
 - You need an API key from <https://platform.openai.com/api-keys>. API usage is billed separately; a ChatGPT Plus/Pro subscription does not include it.
 - The image leaves your machine and goes to OpenAI. Do not enable this for sensitive scenes.
@@ -87,6 +87,7 @@ Accepts jpeg, png or webp data URLs. Returns `201` with `{ filename, path, bytes
 
 ```
 src/server.ts       Express server and upload endpoint
+prompt.txt          Prompt sent to OpenAI together with each snapshot (editable)
 public/index.html   UI
 public/styles.css   Styles
 public/app.ts       Client logic (compiled to app.js)

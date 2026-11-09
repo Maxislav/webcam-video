@@ -12,6 +12,7 @@ Webcam snapshot web app: live camera preview in the browser, optional crop area,
 ## Structure
 
 - `src/server.ts` — Express server, `POST /api/upload-snapshot`, file naming, `analyzeSnapshot()` (OpenAI vision call via `fetch`, active only when `OPENAI_API_KEY` is set)
+- `prompt.txt` — user-editable prompt sent with each snapshot; read per request (no restart), falls back to `DEFAULT_PROMPT` in `src/server.ts` if missing/empty
 - `public/app.ts` — all client logic (camera, device select, crop selection, upload); compiled to `public/app.js`
 - `public/index.html`, `public/styles.css` — UI (supports dark mode via CSS variables)
 - `uploads/` — saved snapshots
