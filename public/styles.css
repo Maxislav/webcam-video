@@ -38,6 +38,12 @@ h1 {
   font-weight: 600;
 }
 
+.prompts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -294,6 +300,30 @@ textarea {
   resize: vertical;
 }
 
+.ask.dragover textarea {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+
+.attachment {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.attachment[hidden] {
+  display: none;
+}
+
+.attachment img {
+  max-width: 160px;
+  max-height: 100px;
+  object-fit: contain;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
@@ -301,6 +331,11 @@ textarea {
 @media (max-width: 800px) {
   .stage {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .prompts {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
   }
 
   .history {

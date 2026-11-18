@@ -5,10 +5,15 @@ const snapshotBtn = document.getElementById("snapshotBtn") as HTMLButtonElement;
 const statusEl = document.getElementById("status") as HTMLParagraphElement;
 const placeholder = document.getElementById("placeholder") as HTMLParagraphElement;
 const flash = document.getElementById("flash") as HTMLDivElement;
+const snapshotPromptInput = document.getElementById("snapshotPromptInput") as HTMLTextAreaElement;
+const askPromptInput = document.getElementById("askPromptInput") as HTMLTextAreaElement;
 const historyEl = document.getElementById("history") as HTMLUListElement;
 const askForm = document.getElementById("askForm") as HTMLFormElement;
 const askInput = document.getElementById("askInput") as HTMLTextAreaElement;
 const askBtn = document.getElementById("askBtn") as HTMLButtonElement;
+const attachmentEl = document.getElementById("attachment") as HTMLDivElement;
+const attachmentPreview = document.getElementById("attachmentPreview") as HTMLImageElement;
+const attachmentRemove = document.getElementById("attachmentRemove") as HTMLButtonElement;
 
 const container = document.querySelector(".camera-container") as HTMLDivElement;
 const selectBtn = document.getElementById("selectBtn") as HTMLButtonElement;
@@ -19,6 +24,10 @@ const selectLayer = document.getElementById("selectLayer") as HTMLDivElement;
 const STORAGE_KEY = "webcam-video:deviceId";
 const CROP_KEY_PREFIX = "webcam-video:crop:";
 const MAX_HISTORY = 100;
+const ATTACHMENT_TYPES = ["image/jpeg", "image/png", "image/webp"];
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_WIDTH = 4096;
+const MAX_HEIGHT = 2160;
 const MIN_CROP = 0.02;
 
 // Crop area as fractions (0..1) of the video frame, so it survives resolution and window size changes.
@@ -41,6 +50,7 @@ interface HistoryEntry {
   kind: "snapshot" | "question";
   title: string;
   answer: string;
+  withImage?: boolean;
 }
 
 let entries: HistoryEntry[] = [];
@@ -51,10 +61,10 @@ function renderEntry(entry: HistoryEntry): HTMLLIElement {
   const meta = document.createElement("div");
   meta.className = "history-meta";
   const time = new Date(entry.time).toLocaleTimeString();
-  meta.textContent = entry.kind === "snapshot" ? `${time} · Snapshot ${entry.title}` : `${time} · Question`;
+  meta.textContent = entry.kind === "snapshot" ? `${time} · Snapshot ${entry.title}` : `${time} · Question${entry.withImage ? " with image" : ""}`;
   li.append(meta);
 
-  if (entry.kind === "question") {
+  if (entry.kind === "question" && entry.title) {
     const question = document.createElement("div");
     question.className = "history-question";
     question.textContent = entry.title;
@@ -265,8 +275,11 @@ async function startStream(deviceId?: string): Promise<void> {
   snapshotBtn.disabled = true;
   selectBtn.disabled = true;
 
+  // "ideal" values make the browser pick the closest mode the camera supports, i.e. its maximum
+  // (without them browsers usually fall back to 640x480 or 1280x720).
+  const resolution = { width: { ideal: MAX_WIDTH }, height: { ideal: MAX_HEIGHT } };
   const stream = await navigator.mediaDevices.getUserMedia({
-    video: deviceId ? { deviceId: { exact: deviceId } } : true,
+    video: deviceId ? { deviceId: { exact: deviceId }, ...resolution } : resolution,
     audio: false,
   });
 
@@ -360,12 +373,12 @@ async function takeSnapshot(): Promise<void> {
     const response = await fetch("/api/upload-snapshot", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image }),
+      body: JSON.stringify({ image, prompt: snapshotPromptInput.value }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error ?? `Upload failed (${response.status})`);
 
-    const saved = `Saved ${data.filename} (${Math.round(data.bytes / 1024)} KB)`;
+    const saved = `Saved ${data.filename} (${sw}×${sh}, ${Math.round(data.bytes / 1024)} KB)`;
     if (data.analysisError) {
       setStatus(`${saved}. ${data.analysisError}`, "error");
     } else {
@@ -383,10 +396,42 @@ async function takeSnapshot(): Promise<void> {
 snapshotBtn.addEventListener("click", () => void takeSnapshot());
 
 let asking = false;
+let attachment: string | null = null;
+
+function setAttachment(dataUrl: string | null): void {
+  attachment = dataUrl;
+  attachmentEl.hidden = !dataUrl;
+  attachmentPreview.src = dataUrl ?? "";
+}
+
+function readAttachment(file: File): void {
+  if (!ATTACHMENT_TYPES.includes(file.type)) {
+    setStatus("Only JPEG, PNG or WebP images can be attached.", "error");
+    return;
+  }
+  if (file.size > MAX_ATTACHMENT_BYTES) {
+    setStatus(`Image is too large (max ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB).`, "error");
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    setAttachment(reader.result as string);
+    setStatus("");
+  };
+  reader.onerror = () => setStatus("Could not read the image.", "error");
+  reader.readAsDataURL(file);
+}
+
+function firstImage(files: FileList | null | undefined): File | undefined {
+  return Array.from(files ?? []).find((file) => file.type.startsWith("image/"));
+}
 
 async function askQuestion(): Promise<void> {
-  const text = askInput.value.trim();
-  if (asking || !text) return;
+  const typed = askInput.value.trim();
+  if (asking || (!typed && !attachment)) return;
+  // An image without a question is asked with the snapshot prompt.
+  const text = typed || (attachment ? snapshotPromptInput.value.trim() : "");
+  const image = attachment;
   asking = true;
   askBtn.disabled = true;
 
@@ -395,13 +440,14 @@ async function askQuestion(): Promise<void> {
     const response = await fetch("/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, prompt: askPromptInput.value, ...(image && { image }) }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error ?? `Request failed (${response.status})`);
 
-    addHistory({ kind: "question", title: text, answer: data.answer });
+    addHistory({ kind: "question", title: text, answer: data.answer, withImage: !!image });
     askInput.value = "";
+    setAttachment(null);
     setStatus("");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : "Request failed", "error");
@@ -410,6 +456,33 @@ async function askQuestion(): Promise<void> {
     askBtn.disabled = false;
   }
 }
+
+attachmentRemove.addEventListener("click", () => setAttachment(null));
+
+askForm.addEventListener("paste", (event) => {
+  const file = firstImage(event.clipboardData?.files);
+  if (!file) return;
+  event.preventDefault();
+  readAttachment(file);
+});
+
+askForm.addEventListener("dragover", (event) => {
+  if (!event.dataTransfer?.types.includes("Files")) return;
+  event.preventDefault();
+  askForm.classList.add("dragover");
+});
+
+askForm.addEventListener("dragleave", (event) => {
+  if (!askForm.contains(event.relatedTarget as Node | null)) askForm.classList.remove("dragover");
+});
+
+askForm.addEventListener("drop", (event) => {
+  event.preventDefault();
+  askForm.classList.remove("dragover");
+  const file = firstImage(event.dataTransfer?.files);
+  if (file) readAttachment(file);
+  else if (event.dataTransfer?.files.length) setStatus("Only image files can be attached.", "error");
+});
 
 askForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -439,7 +512,20 @@ document.addEventListener("keydown", (event) => {
   void takeSnapshot();
 });
 
+// Prefill the field with the server default (prompt.txt); the user can edit it before each snapshot.
+async function loadPrompt(): Promise<void> {
+  try {
+    const response = await fetch("/api/prompt");
+    const data = await response.json();
+    if (response.ok && typeof data.prompt === "string" && !snapshotPromptInput.value) snapshotPromptInput.value = data.prompt;
+  } catch {
+    // Leave the field empty: the server then falls back to prompt.txt.
+  }
+}
+
 async function init(): Promise<void> {
+  void loadPrompt();
+
   if (!navigator.mediaDevices?.getUserMedia) {
     placeholder.textContent = "Camera API unavailable";
     setStatus("getUserMedia requires HTTPS or localhost.", "error");

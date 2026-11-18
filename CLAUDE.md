@@ -11,8 +11,8 @@ Webcam snapshot web app: live camera preview in the browser, optional crop area,
 
 ## Structure
 
-- `src/server.ts` — Express server, `POST /api/upload-snapshot`, file naming, `analyzeSnapshot()` (OpenAI `chat/completions` vision call via `fetch`, active only when `OPENAI_API_KEY` is set; each request is stateless, no conversation context), `POST /api/ask` (text-only question, also stateless)
-- `prompt.txt` — user-editable prompt sent with each snapshot; read per request (no restart), falls back to `DEFAULT_PROMPT` in `src/server.ts` if missing/empty
+- `src/server.ts` — Express server, `POST /api/upload-snapshot`, file naming, `analyzeSnapshot()` (OpenAI `chat/completions` vision call via `fetch`, active only when `OPENAI_API_KEY` is set; each request is stateless, no conversation context), `POST /api/ask` (question with optional image from drop/paste in the ask field, not saved to `uploads/`; also stateless)
+- `prompt.txt` — default prompt; read per request (no restart), falls back to `DEFAULT_PROMPT` in `src/server.ts` if missing/empty. The page shows it in an editable "Snapshot prompt" field (next to a second, initially empty "Question prompt" field that `POST /api/ask` receives as `prompt` and sends as a system message) (`GET /api/prompt` prefills it on load) and sends the field value as `prompt` with each snapshot; an empty value falls back to `prompt.txt`
 - `public/app.ts` — all client logic (camera, device select, crop selection, upload); compiled to `public/app.js`
 - `public/index.html`, `public/styles.css` — UI (always dark theme via CSS variables; text fields & select stay light via `--field-*`)
 - `uploads/` — saved snapshots

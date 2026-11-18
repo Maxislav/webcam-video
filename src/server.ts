@@ -10,10 +10,10 @@ try {
 
 const PORT = Number(process.env.PORT ?? 3000);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4.1";
 const DEFAULT_PROMPT = "Describe what is in the image.";
 const ANALYSIS_TIMEOUT_MS = 30_000;
-const MAX_QUESTION_LENGTH = 8000;
+const MAX_TEXT_LENGTH = 8000;
 const ROOT_DIR = path.resolve(import.meta.dirname, "..");
 const UPLOADS_DIR = path.join(ROOT_DIR, "uploads");
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
@@ -51,7 +51,7 @@ async function readPrompt(): Promise<string> {
 
 type ContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
 
-async function requestModel(content: ContentPart[]): Promise<Analysis> {
+async function requestModel(content: ContentPart[], system = ""): Promise<Analysis> {
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -60,7 +60,7 @@ async function requestModel(content: ContentPart[]): Promise<Analysis> {
     },
     body: JSON.stringify({
       model: OPENAI_MODEL,
-      messages: [{ role: "user", content }],
+      messages: [...(system ? [{ role: "system", content: system }] : []), { role: "user", content }],
     }),
     signal: AbortSignal.timeout(ANALYSIS_TIMEOUT_MS),
   });
@@ -78,21 +78,26 @@ async function requestModel(content: ContentPart[]): Promise<Analysis> {
 
 /**
  * Sends the saved snapshot to OpenAI (vision) and returns the model's description.
+ * customPrompt (from the page) wins over prompt.txt when non-empty.
  * Returns null when OPENAI_API_KEY is not set. Throws on API errors.
  */
-async function analyzeSnapshot(imageBuffer: Buffer, mime: string): Promise<Analysis | null> {
+async function analyzeSnapshot(imageBuffer: Buffer, mime: string, customPrompt: string): Promise<Analysis | null> {
   if (!OPENAI_API_KEY) return null;
 
-  const prompt = await readPrompt();
+  const prompt = customPrompt || (await readPrompt());
   return requestModel([
     { type: "text", text: prompt },
     { type: "image_url", image_url: { url: `data:${mime};base64,${imageBuffer.toString("base64")}` } },
   ]);
 }
 
-// Text-only question, answered independently of earlier snapshots. Throws on API errors.
-function askText(text: string): Promise<Analysis> {
-  return requestModel([{ type: "text", text }]);
+// Free-form question with an optional image, answered independently of earlier requests.
+// `system` (from the page's question prompt) is sent as a system message when non-empty.
+// Without text, the prompt.txt prompt is used. Throws on API errors.
+async function askText(text: string, image: string | null, system: string): Promise<Analysis> {
+  const parts: ContentPart[] = [{ type: "text", text: text || (await readPrompt()) }];
+  if (image) parts.push({ type: "image_url", image_url: { url: image } });
+  return requestModel(parts, system);
 }
 
 // YYYY-MM-DD_HH-mm-ss in server local time.
@@ -137,6 +142,12 @@ async function uploadSnapshot(req: Request, res: Response): Promise<void> {
     return;
   }
 
+  const rawPrompt: unknown = req.body?.prompt ?? "";
+  if (typeof rawPrompt !== "string" || rawPrompt.length > MAX_TEXT_LENGTH) {
+    res.status(400).json({ error: `prompt must be a string of at most ${MAX_TEXT_LENGTH} characters` });
+    return;
+  }
+
   await mkdir(UPLOADS_DIR, { recursive: true });
   const filename = await writeUniqueFile(timestampName(new Date()), EXTENSIONS[mime], buffer);
 
@@ -151,7 +162,7 @@ async function uploadSnapshot(req: Request, res: Response): Promise<void> {
   let analysis: Analysis | null = null;
   let analysisError: string | undefined;
   try {
-    analysis = await analyzeSnapshot(buffer, mime);
+    analysis = await analyzeSnapshot(buffer, mime, rawPrompt.trim());
   } catch (err) {
     console.error("Snapshot analysis failed:", err);
     analysisError = "Analysis failed (see server log for details)";
@@ -161,13 +172,28 @@ async function uploadSnapshot(req: Request, res: Response): Promise<void> {
 }
 
 async function ask(req: Request, res: Response): Promise<void> {
-  const text: unknown = req.body?.text;
-  if (typeof text !== "string" || !text.trim()) {
-    res.status(400).json({ error: "Body must be JSON: { text: <non-empty string> }" });
+  const rawText: unknown = req.body?.text ?? "";
+  const rawImage: unknown = req.body?.image ?? null;
+  if (typeof rawText !== "string" || (rawImage !== null && typeof rawImage !== "string")) {
+    res.status(400).json({ error: "Body must be JSON: { text?: <string>, image?: <base64 data URL> }" });
     return;
   }
-  if (text.length > MAX_QUESTION_LENGTH) {
-    res.status(400).json({ error: `text is too long (max ${MAX_QUESTION_LENGTH} characters)` });
+  const rawSystem: unknown = req.body?.prompt ?? "";
+  if (typeof rawSystem !== "string" || rawSystem.length > MAX_TEXT_LENGTH) {
+    res.status(400).json({ error: `prompt must be a string of at most ${MAX_TEXT_LENGTH} characters` });
+    return;
+  }
+  const text = rawText.trim();
+  if (text.length > MAX_TEXT_LENGTH) {
+    res.status(400).json({ error: `text is too long (max ${MAX_TEXT_LENGTH} characters)` });
+    return;
+  }
+  if (rawImage !== null && !DATA_URL_RE.test(rawImage as string)) {
+    res.status(400).json({ error: "image must be a base64 data URL (jpeg, png or webp)" });
+    return;
+  }
+  if (!text && rawImage === null) {
+    res.status(400).json({ error: "Provide text, an image, or both" });
     return;
   }
   if (!OPENAI_API_KEY) {
@@ -176,7 +202,7 @@ async function ask(req: Request, res: Response): Promise<void> {
   }
 
   try {
-    const answer = await askText(text.trim());
+    const answer = await askText(text, rawImage as string | null, rawSystem.trim());
     res.json({ answer: answer.text, model: answer.model });
   } catch (err) {
     // OpenAI error messages can echo part of the API key, so keep details in the log.
@@ -189,6 +215,10 @@ const app = express();
 
 app.use(express.json({ limit: "15mb" }));
 app.use(express.static(PUBLIC_DIR));
+
+app.get("/api/prompt", (_req, res, next) => {
+  readPrompt().then((prompt) => res.json({ prompt }), next);
+});
 
 app.post("/api/upload-snapshot", (req, res, next) => {
   uploadSnapshot(req, res).catch(next);
