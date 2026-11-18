@@ -13,6 +13,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 const DEFAULT_PROMPT = "Describe what is in the image.";
 const ANALYSIS_TIMEOUT_MS = 30_000;
+const MAX_QUESTION_LENGTH = 8000;
 const ROOT_DIR = path.resolve(import.meta.dirname, "..");
 const UPLOADS_DIR = path.join(ROOT_DIR, "uploads");
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
@@ -48,15 +49,22 @@ async function readPrompt(): Promise<string> {
   return DEFAULT_PROMPT;
 }
 
-/**
- * Sends the saved snapshot to OpenAI (vision) and returns the model's description.
- * Returns null when OPENAI_API_KEY is not set. Throws on API errors.
- */
-async function analyzeSnapshot(imageBuffer: Buffer, mime: string): Promise<Analysis | null> {
-  if (!OPENAI_API_KEY) return null;
+interface ResponsesResult {
+  id?: string;
+  output?: { type: string; content?: { type: string; text?: string }[] }[];
+}
 
-  const prompt = await readPrompt();
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+// Id of the last stored response; passed as previous_response_id so OpenAI keeps the
+// conversation context. Lives in memory, so a server restart starts a new conversation.
+let previousResponseId: string | null = null;
+
+// Analyses run one at a time so each request chains onto the previous response.
+let analysisQueue: Promise<unknown> = Promise.resolve();
+
+type InputPart = { type: "input_text"; text: string } | { type: "input_image"; image_url: string };
+
+async function requestModel(content: InputPart[]): Promise<Analysis> {
+  const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -64,18 +72,9 @@ async function analyzeSnapshot(imageBuffer: Buffer, mime: string): Promise<Analy
     },
     body: JSON.stringify({
       model: OPENAI_MODEL,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: prompt },
-            {
-              type: "image_url",
-              image_url: { url: `data:${mime};base64,${imageBuffer.toString("base64")}` },
-            },
-          ],
-        },
-      ],
+      input: [{ role: "user", content }],
+      store: true,
+      ...(previousResponseId && { previous_response_id: previousResponseId }),
     }),
     signal: AbortSignal.timeout(ANALYSIS_TIMEOUT_MS),
   });
@@ -85,10 +84,58 @@ async function analyzeSnapshot(imageBuffer: Buffer, mime: string): Promise<Analy
     throw new Error(`OpenAI ${response.status}: ${body?.error?.message ?? response.statusText}`);
   }
 
-  const data = (await response.json()) as { choices?: { message?: { content?: string } }[] };
-  const text = data.choices?.[0]?.message?.content?.trim();
+  const data = (await response.json()) as ResponsesResult;
+  const text = (data.output ?? [])
+    .filter((item) => item.type === "message")
+    .flatMap((item) => item.content ?? [])
+    .filter((item) => item.type === "output_text")
+    .map((item) => item.text ?? "")
+    .join("\n")
+    .trim();
   if (!text) throw new Error("OpenAI returned an empty response");
+
+  // Only advance the context after a successful answer.
+  if (data.id) previousResponseId = data.id;
   return { text, model: OPENAI_MODEL };
+}
+
+// Every request chains onto the previous response, so they run one at a time.
+function enqueue(task: () => Promise<Analysis>): Promise<Analysis> {
+  const run = analysisQueue.then(task);
+  analysisQueue = run.catch(() => undefined);
+  return run;
+}
+
+// Queued behind running requests so a late answer cannot restore the old context.
+function resetContext(): Promise<void> {
+  const run = analysisQueue.then(() => {
+    previousResponseId = null;
+  });
+  analysisQueue = run;
+  return run;
+}
+
+/**
+ * Sends the saved snapshot to OpenAI (Responses API, vision) and returns the model's description.
+ * Each answer is stored (`store: true`) and linked via `previous_response_id`, so later snapshots
+ * and text questions are answered with the earlier ones as context.
+ * Returns null when OPENAI_API_KEY is not set. Throws on API errors.
+ */
+function analyzeSnapshot(imageBuffer: Buffer, mime: string): Promise<Analysis | null> {
+  if (!OPENAI_API_KEY) return Promise.resolve(null);
+
+  return enqueue(async () => {
+    const prompt = await readPrompt();
+    return requestModel([
+      { type: "input_text", text: prompt },
+      { type: "input_image", image_url: `data:${mime};base64,${imageBuffer.toString("base64")}` },
+    ]);
+  });
+}
+
+// Text-only question in the same conversation as the snapshots. Throws on API errors.
+function askText(text: string): Promise<Analysis> {
+  return enqueue(() => requestModel([{ type: "input_text", text }]));
 }
 
 // YYYY-MM-DD_HH-mm-ss in server local time.
@@ -156,6 +203,31 @@ async function uploadSnapshot(req: Request, res: Response): Promise<void> {
   res.status(201).json({ ...saved, analysis, ...(analysisError && { analysisError }) });
 }
 
+async function ask(req: Request, res: Response): Promise<void> {
+  const text: unknown = req.body?.text;
+  if (typeof text !== "string" || !text.trim()) {
+    res.status(400).json({ error: "Body must be JSON: { text: <non-empty string> }" });
+    return;
+  }
+  if (text.length > MAX_QUESTION_LENGTH) {
+    res.status(400).json({ error: `text is too long (max ${MAX_QUESTION_LENGTH} characters)` });
+    return;
+  }
+  if (!OPENAI_API_KEY) {
+    res.status(503).json({ error: "OPENAI_API_KEY is not set on the server" });
+    return;
+  }
+
+  try {
+    const answer = await askText(text.trim());
+    res.json({ answer: answer.text, model: answer.model });
+  } catch (err) {
+    // OpenAI error messages can echo part of the API key, so keep details in the log.
+    console.error("Text request failed:", err);
+    res.status(502).json({ error: "Request failed (see server log for details)" });
+  }
+}
+
 const app = express();
 
 app.use(express.json({ limit: "15mb" }));
@@ -163,6 +235,14 @@ app.use(express.static(PUBLIC_DIR));
 
 app.post("/api/upload-snapshot", (req, res, next) => {
   uploadSnapshot(req, res).catch(next);
+});
+
+app.post("/api/reset-context", (_req, res, next) => {
+  resetContext().then(() => res.status(204).end(), next);
+});
+
+app.post("/api/ask", (req, res, next) => {
+  ask(req, res).catch(next);
 });
 
 app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: NextFunction) => {

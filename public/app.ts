@@ -5,7 +5,10 @@ const snapshotBtn = document.getElementById("snapshotBtn") as HTMLButtonElement;
 const statusEl = document.getElementById("status") as HTMLParagraphElement;
 const placeholder = document.getElementById("placeholder") as HTMLParagraphElement;
 const flash = document.getElementById("flash") as HTMLDivElement;
-const analysisEl = document.getElementById("analysis") as HTMLDivElement;
+const historyEl = document.getElementById("history") as HTMLUListElement;
+const askForm = document.getElementById("askForm") as HTMLFormElement;
+const askInput = document.getElementById("askInput") as HTMLTextAreaElement;
+const askBtn = document.getElementById("askBtn") as HTMLButtonElement;
 
 const container = document.querySelector(".camera-container") as HTMLDivElement;
 const selectBtn = document.getElementById("selectBtn") as HTMLButtonElement;
@@ -15,6 +18,7 @@ const selectLayer = document.getElementById("selectLayer") as HTMLDivElement;
 
 const STORAGE_KEY = "webcam-video:deviceId";
 const CROP_KEY_PREFIX = "webcam-video:crop:";
+const MAX_HISTORY = 100;
 const MIN_CROP = 0.02;
 
 // Crop area as fractions (0..1) of the video frame, so it survives resolution and window size changes.
@@ -30,6 +34,49 @@ let uploading = false;
 let crop: Crop | null = null;
 let selecting = false;
 let dragCrop: Crop | null = null;
+
+// One model answer. Kept in memory only: a page reload clears the list, together with the server-side context.
+interface HistoryEntry {
+  time: number;
+  kind: "snapshot" | "question";
+  title: string;
+  answer: string;
+}
+
+let entries: HistoryEntry[] = [];
+
+function renderEntry(entry: HistoryEntry): HTMLLIElement {
+  const li = document.createElement("li");
+
+  const meta = document.createElement("div");
+  meta.className = "history-meta";
+  const time = new Date(entry.time).toLocaleTimeString();
+  meta.textContent = entry.kind === "snapshot" ? `${time} · Snapshot ${entry.title}` : `${time} · Question`;
+  li.append(meta);
+
+  if (entry.kind === "question") {
+    const question = document.createElement("div");
+    question.className = "history-question";
+    question.textContent = entry.title;
+    li.append(question);
+  }
+
+  const answer = document.createElement("div");
+  answer.className = "history-answer";
+  answer.textContent = entry.answer;
+  li.append(answer);
+  return li;
+}
+
+function renderHistory(): void {
+  historyEl.replaceChildren(...entries.map(renderEntry));
+  historyEl.scrollTop = historyEl.scrollHeight;
+}
+
+function addHistory(entry: Omit<HistoryEntry, "time">): void {
+  entries = [...entries, { ...entry, time: Date.now() }].slice(-MAX_HISTORY);
+  renderHistory();
+}
 
 type StatusKind = "" | "loading" | "success" | "error";
 
@@ -309,8 +356,6 @@ async function takeSnapshot(): Promise<void> {
     canvas.getContext("2d")!.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
     const image = canvas.toDataURL("image/jpeg", 0.92);
 
-    analysisEl.hidden = true;
-    analysisEl.textContent = "";
     setStatus("Uploading and analyzing…", "loading");
     const response = await fetch("/api/upload-snapshot", {
       method: "POST",
@@ -326,10 +371,7 @@ async function takeSnapshot(): Promise<void> {
     } else {
       setStatus(saved, "success");
     }
-    if (data.analysis?.text) {
-      analysisEl.textContent = data.analysis.text;
-      analysisEl.hidden = false;
-    }
+    if (data.analysis?.text) addHistory({ kind: "snapshot", title: data.filename, answer: data.analysis.text });
   } catch (err) {
     setStatus(err instanceof Error ? err.message : "Upload failed", "error");
   } finally {
@@ -339,6 +381,47 @@ async function takeSnapshot(): Promise<void> {
 }
 
 snapshotBtn.addEventListener("click", () => void takeSnapshot());
+
+let asking = false;
+
+async function askQuestion(): Promise<void> {
+  const text = askInput.value.trim();
+  if (asking || !text) return;
+  asking = true;
+  askBtn.disabled = true;
+
+  try {
+    setStatus("Waiting for the answer…", "loading");
+    const response = await fetch("/api/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error ?? `Request failed (${response.status})`);
+
+    addHistory({ kind: "question", title: text, answer: data.answer });
+    askInput.value = "";
+    setStatus("");
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : "Request failed", "error");
+  } finally {
+    asking = false;
+    askBtn.disabled = false;
+  }
+}
+
+askForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void askQuestion();
+});
+
+askInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    askForm.requestSubmit();
+  }
+});
 
 deviceSelect.addEventListener("change", () => void switchDevice(deviceSelect.value));
 
@@ -351,12 +434,15 @@ document.addEventListener("keydown", (event) => {
   if (event.code !== "Space" && event.code !== "Enter") return;
   if (event.repeat) return;
   // Let focused controls handle their own Space/Enter activation.
-  if (event.target instanceof HTMLElement && event.target.closest("select, button")) return;
+  if (event.target instanceof HTMLElement && event.target.closest("select, button, textarea")) return;
   event.preventDefault();
   void takeSnapshot();
 });
 
 async function init(): Promise<void> {
+  // A page load starts a new conversation with the model.
+  void fetch("/api/reset-context", { method: "POST" }).catch(() => undefined);
+
   if (!navigator.mediaDevices?.getUserMedia) {
     placeholder.textContent = "Camera API unavailable";
     setStatus("getUserMedia requires HTTPS or localhost.", "error");

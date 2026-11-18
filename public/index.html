@@ -17,12 +17,15 @@
       </select>
     </div>
 
-    <div class="camera-container">
-      <video id="video" autoplay playsinline muted></video>
-      <div id="selection" class="selection" hidden></div>
-      <div id="selectLayer" class="select-layer"></div>
-      <div id="flash" class="flash"></div>
-      <p id="placeholder" class="placeholder">Waiting for camera…</p>
+    <div class="stage">
+      <div class="camera-container">
+        <video id="video" autoplay playsinline muted></video>
+        <div id="selection" class="selection" hidden></div>
+        <div id="selectLayer" class="select-layer"></div>
+        <div id="flash" class="flash"></div>
+        <p id="placeholder" class="placeholder">Waiting for camera…</p>
+      </div>
+      <ul id="history" class="history" aria-label="Answers"></ul>
     </div>
 
     <div class="actions">
@@ -34,7 +37,13 @@
 
     <p id="status" class="status" role="status" aria-live="polite"></p>
 
-    <div id="analysis" class="analysis" hidden></div>
+    <form id="askForm" class="ask">
+      <label for="askInput">Ask without a picture</label>
+      <textarea id="askInput" rows="3" placeholder="Type a question… (Enter to send, Shift+Enter for a new line)"></textarea>
+      <div class="actions">
+        <button id="askBtn" type="submit">Send</button>
+      </div>
+    </form>
 
     <canvas id="canvas" hidden></canvas>
   </main>
