@@ -55,14 +55,33 @@ interface HistoryEntry {
 
 let entries: HistoryEntry[] = [];
 
+// Puts an answer into the ask field (after existing text, if any) and focuses it.
+function useAsQuestion(text: string): void {
+  askInput.value = askInput.value.trim() ? `${askInput.value.trimEnd()}\n\n${text}` : text;
+  askInput.focus();
+  askInput.setSelectionRange(askInput.value.length, askInput.value.length);
+}
+
 function renderEntry(entry: HistoryEntry): HTMLLIElement {
   const li = document.createElement("li");
 
-  const meta = document.createElement("div");
+  const header = document.createElement("div");
+  header.className = "history-header";
+
+  const meta = document.createElement("span");
   meta.className = "history-meta";
   const time = new Date(entry.time).toLocaleTimeString();
   meta.textContent = entry.kind === "snapshot" ? `${time} · Snapshot ${entry.title}` : `${time} · Question${entry.withImage ? " with image" : ""}`;
-  li.append(meta);
+
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "secondary history-copy";
+  copy.textContent = "To question";
+  copy.title = "Copy this answer into the ask field";
+  copy.addEventListener("click", () => useAsQuestion(entry.answer));
+
+  header.append(meta, copy);
+  li.append(header);
 
   if (entry.kind === "question" && entry.title) {
     const question = document.createElement("div");
@@ -429,8 +448,9 @@ function firstImage(files: FileList | null | undefined): File | undefined {
 async function askQuestion(): Promise<void> {
   const typed = askInput.value.trim();
   if (asking || (!typed && !attachment)) return;
-  // An image without a question is asked with the snapshot prompt.
-  const text = typed || (attachment ? snapshotPromptInput.value.trim() : "");
+  // An image without a question is asked with the snapshot prompt; the question prompt is appended to the end.
+  const base = typed || (attachment ? snapshotPromptInput.value.trim() : "");
+  const text = [base, askPromptInput.value.trim()].filter(Boolean).join("\n\n");
   const image = attachment;
   asking = true;
   askBtn.disabled = true;
@@ -440,7 +460,7 @@ async function askQuestion(): Promise<void> {
     const response = await fetch("/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, prompt: askPromptInput.value, ...(image && { image }) }),
+      body: JSON.stringify({ text, ...(image && { image }) }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error ?? `Request failed (${response.status})`);
@@ -512,19 +532,62 @@ document.addEventListener("keydown", (event) => {
   void takeSnapshot();
 });
 
-// Prefill the field with the server default (prompt.txt); the user can edit it before each snapshot.
-async function loadPrompt(): Promise<void> {
+type PromptKey = "snapshot_prompt" | "text_prompt";
+
+const PROMPT_FIELDS: [PromptKey, HTMLTextAreaElement][] = [
+  ["snapshot_prompt", snapshotPromptInput],
+  ["text_prompt", askPromptInput],
+];
+const PROMPT_SAVE_DELAY_MS = 700;
+
+// Prefill the fields from prompts.json on the server.
+async function loadPrompts(): Promise<void> {
   try {
-    const response = await fetch("/api/prompt");
+    const response = await fetch("/api/prompts");
     const data = await response.json();
-    if (response.ok && typeof data.prompt === "string" && !snapshotPromptInput.value) snapshotPromptInput.value = data.prompt;
+    if (!response.ok) return;
+    for (const [key, input] of PROMPT_FIELDS) {
+      if (typeof data[key] === "string" && !input.value) input.value = data[key];
+    }
   } catch {
-    // Leave the field empty: the server then falls back to prompt.txt.
+    // Leave the fields empty: the server then falls back to the saved prompts.
   }
 }
 
+// Debounced save to prompts.json while typing; flushed when the page is closed or reloaded.
+function autosavePrompt(key: PromptKey, input: HTMLTextAreaElement): void {
+  let timer: number | undefined;
+
+  const save = (keepalive: boolean): void => {
+    timer = undefined;
+    fetch("/api/prompts", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [key]: input.value }),
+      keepalive,
+    })
+      .then((response) => {
+        if (!response.ok) setStatus("Could not save the prompt", "error");
+      })
+      .catch(() => setStatus("Could not save the prompt", "error"));
+  };
+
+  input.addEventListener("input", () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => save(false), PROMPT_SAVE_DELAY_MS);
+  });
+
+  window.addEventListener("pagehide", () => {
+    if (timer === undefined) return;
+    window.clearTimeout(timer);
+    save(true);
+  });
+}
+
+for (const [key, input] of PROMPT_FIELDS) autosavePrompt(key, input);
+
 async function init(): Promise<void> {
-  void loadPrompt();
+  void loadPrompts();
 
   if (!navigator.mediaDevices?.getUserMedia) {
     placeholder.textContent = "Camera API unavailable";

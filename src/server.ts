@@ -1,5 +1,5 @@
 import express, { type NextFunction, type Request, type Response } from "express";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 try {
@@ -17,7 +17,7 @@ const MAX_TEXT_LENGTH = 8000;
 const ROOT_DIR = path.resolve(import.meta.dirname, "..");
 const UPLOADS_DIR = path.join(ROOT_DIR, "uploads");
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
-const PROMPT_FILE = path.join(ROOT_DIR, "prompt.txt");
+const PROMPTS_FILE = path.join(ROOT_DIR, "prompts.json");
 
 const EXTENSIONS: Record<string, string> = {
   "image/jpeg": "jpg",
@@ -38,20 +38,50 @@ interface Analysis {
   model: string;
 }
 
-// Read on every request so edits to prompt.txt apply without restarting the server.
-async function readPrompt(): Promise<string> {
+interface Prompts {
+  snapshot_prompt: string;
+  text_prompt: string;
+}
+
+const PROMPT_KEYS = ["snapshot_prompt", "text_prompt"] as const;
+
+// Read on every request so edits to prompts.json apply without restarting the server.
+async function readPrompts(): Promise<Prompts> {
+  let parsed: Record<string, unknown> = {};
   try {
-    const text = (await readFile(PROMPT_FILE, "utf8")).trim();
-    if (text) return text;
+    const value: unknown = JSON.parse(await readFile(PROMPTS_FILE, "utf8"));
+    if (value && typeof value === "object") parsed = value as Record<string, unknown>;
   } catch {
-    // Missing or unreadable file: fall back to the default prompt.
+    // Missing or invalid file: fall back to the defaults.
   }
-  return DEFAULT_PROMPT;
+  return {
+    snapshot_prompt: typeof parsed.snapshot_prompt === "string" ? parsed.snapshot_prompt : DEFAULT_PROMPT,
+    text_prompt: typeof parsed.text_prompt === "string" ? parsed.text_prompt : "",
+  };
+}
+
+// Writes are serialized (read-modify-write) and atomic (temp file + rename).
+let promptsWrite: Promise<unknown> = Promise.resolve();
+
+function savePrompts(patch: Partial<Prompts>): Promise<Prompts> {
+  const run = promptsWrite.then(async () => {
+    const next = { ...(await readPrompts()), ...patch };
+    const tmp = `${PROMPTS_FILE}.tmp`;
+    await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+    await rename(tmp, PROMPTS_FILE);
+    return next;
+  });
+  promptsWrite = run.catch(() => undefined);
+  return run;
+}
+
+async function readSnapshotPrompt(): Promise<string> {
+  return (await readPrompts()).snapshot_prompt.trim() || DEFAULT_PROMPT;
 }
 
 type ContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
 
-async function requestModel(content: ContentPart[], system = ""): Promise<Analysis> {
+async function requestModel(content: ContentPart[]): Promise<Analysis> {
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -60,7 +90,7 @@ async function requestModel(content: ContentPart[], system = ""): Promise<Analys
     },
     body: JSON.stringify({
       model: OPENAI_MODEL,
-      messages: [...(system ? [{ role: "system", content: system }] : []), { role: "user", content }],
+      messages: [{ role: "user", content }],
     }),
     signal: AbortSignal.timeout(ANALYSIS_TIMEOUT_MS),
   });
@@ -78,13 +108,13 @@ async function requestModel(content: ContentPart[], system = ""): Promise<Analys
 
 /**
  * Sends the saved snapshot to OpenAI (vision) and returns the model's description.
- * customPrompt (from the page) wins over prompt.txt when non-empty.
+ * customPrompt (from the page) wins over snapshot_prompt in prompts.json when non-empty.
  * Returns null when OPENAI_API_KEY is not set. Throws on API errors.
  */
 async function analyzeSnapshot(imageBuffer: Buffer, mime: string, customPrompt: string): Promise<Analysis | null> {
   if (!OPENAI_API_KEY) return null;
 
-  const prompt = customPrompt || (await readPrompt());
+  const prompt = customPrompt || (await readSnapshotPrompt());
   return requestModel([
     { type: "text", text: prompt },
     { type: "image_url", image_url: { url: `data:${mime};base64,${imageBuffer.toString("base64")}` } },
@@ -92,12 +122,11 @@ async function analyzeSnapshot(imageBuffer: Buffer, mime: string, customPrompt: 
 }
 
 // Free-form question with an optional image, answered independently of earlier requests.
-// `system` (from the page's question prompt) is sent as a system message when non-empty.
-// Without text, the prompt.txt prompt is used. Throws on API errors.
-async function askText(text: string, image: string | null, system: string): Promise<Analysis> {
-  const parts: ContentPart[] = [{ type: "text", text: text || (await readPrompt()) }];
+// Without text, snapshot_prompt from prompts.json is used. Throws on API errors.
+async function askText(text: string, image: string | null): Promise<Analysis> {
+  const parts: ContentPart[] = [{ type: "text", text: text || (await readSnapshotPrompt()) }];
   if (image) parts.push({ type: "image_url", image_url: { url: image } });
-  return requestModel(parts, system);
+  return requestModel(parts);
 }
 
 // YYYY-MM-DD_HH-mm-ss in server local time.
@@ -178,11 +207,6 @@ async function ask(req: Request, res: Response): Promise<void> {
     res.status(400).json({ error: "Body must be JSON: { text?: <string>, image?: <base64 data URL> }" });
     return;
   }
-  const rawSystem: unknown = req.body?.prompt ?? "";
-  if (typeof rawSystem !== "string" || rawSystem.length > MAX_TEXT_LENGTH) {
-    res.status(400).json({ error: `prompt must be a string of at most ${MAX_TEXT_LENGTH} characters` });
-    return;
-  }
   const text = rawText.trim();
   if (text.length > MAX_TEXT_LENGTH) {
     res.status(400).json({ error: `text is too long (max ${MAX_TEXT_LENGTH} characters)` });
@@ -202,7 +226,7 @@ async function ask(req: Request, res: Response): Promise<void> {
   }
 
   try {
-    const answer = await askText(text, rawImage as string | null, rawSystem.trim());
+    const answer = await askText(text, rawImage as string | null);
     res.json({ answer: answer.text, model: answer.model });
   } catch (err) {
     // OpenAI error messages can echo part of the API key, so keep details in the log.
@@ -216,8 +240,26 @@ const app = express();
 app.use(express.json({ limit: "15mb" }));
 app.use(express.static(PUBLIC_DIR));
 
-app.get("/api/prompt", (_req, res, next) => {
-  readPrompt().then((prompt) => res.json({ prompt }), next);
+app.get("/api/prompts", (_req, res, next) => {
+  readPrompts().then((prompts) => res.json(prompts), next);
+});
+
+app.put("/api/prompts", (req, res, next) => {
+  const patch: Partial<Prompts> = {};
+  for (const key of PROMPT_KEYS) {
+    const value: unknown = req.body?.[key];
+    if (value === undefined) continue;
+    if (typeof value !== "string" || value.length > MAX_TEXT_LENGTH) {
+      res.status(400).json({ error: `${key} must be a string of at most ${MAX_TEXT_LENGTH} characters` });
+      return;
+    }
+    patch[key] = value;
+  }
+  if (Object.keys(patch).length === 0) {
+    res.status(400).json({ error: "Body must be JSON with snapshot_prompt and/or text_prompt" });
+    return;
+  }
+  savePrompts(patch).then((prompts) => res.json(prompts), next);
 });
 
 app.post("/api/upload-snapshot", (req, res, next) => {

@@ -10,15 +10,9 @@
   <main class="app">
     <h1>Camera Capture</h1>
 
-    <div class="prompts">
-      <div class="field">
-        <label for="snapshotPromptInput">Snapshot prompt (sent with each snapshot)</label>
-        <textarea id="snapshotPromptInput" rows="3" placeholder="What should the model do with each snapshot?"></textarea>
-      </div>
-      <div class="field">
-        <label for="askPromptInput">Question prompt (instructions sent with typed questions)</label>
-        <textarea id="askPromptInput" rows="3" placeholder="Optional, e.g. “Answer briefly in Russian”"></textarea>
-      </div>
+    <div class="field">
+      <label for="snapshotPromptInput">Snapshot prompt (sent with each snapshot)</label>
+      <textarea id="snapshotPromptInput" rows="3" maxlength="8000" placeholder="What should the model do with each snapshot?"></textarea>
     </div>
 
     <div class="field">
@@ -51,6 +45,8 @@
     <form id="askForm" class="ask">
       <label for="askInput">Ask a question (drop or paste an image into the field to include it)</label>
       <textarea id="askInput" rows="3" placeholder="Type a question… (Enter to send, Shift+Enter for a new line)"></textarea>
+      <label for="askPromptInput">Question prompt (appended to the end of your question on Send)</label>
+      <textarea id="askPromptInput" rows="2" maxlength="8000" placeholder="Optional, e.g. “Answer briefly in Russian”"></textarea>
       <div id="attachment" class="attachment" hidden>
         <img id="attachmentPreview" alt="Attached image" />
         <button id="attachmentRemove" type="button" class="secondary">Remove image</button>
