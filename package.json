@@ -9,11 +9,14 @@
     "build:server": "tsc -p tsconfig.json",
     "build": "npm run build:client && npm run build:server",
     "dev": "npm run build:client && tsx watch src/server.ts",
+    "mcp": "tsx src/mcp.ts",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p public/tsconfig.json --noEmit"
   },
   "dependencies": {
-    "express": "^4.21.2"
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "express": "^4.21.2",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",

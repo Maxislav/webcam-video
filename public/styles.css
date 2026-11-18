@@ -277,6 +277,12 @@ kbd {
   font-size: 0.8rem;
 }
 
+.history-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
 .history-question {
   font-weight: 500;
   white-space: pre-wrap;

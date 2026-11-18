@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "node",
+      "args": [
+        "--import",
+        "tsx",
+        "src/mcp.ts"
+      ]
+    }
+  }
+}

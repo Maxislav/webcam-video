@@ -103,6 +103,25 @@ Saves one or both prompts (strings of up to 8000 characters) into `prompts.json`
 
 Sends a question to OpenAI. `text` and `image` (jpeg, png or webp data URL) are both optional, but at least one is required; with an image and no text `snapshot_prompt` is used. The image is not saved. Every request is independent: the model does not remember earlier snapshots or questions. Returns `200` with `{ answer, model }`, `400` with `{ error }` for neither text nor image, a too long (over 8000 characters) text or an invalid image, `503` if `OPENAI_API_KEY` is not set, or `502` with a generic `{ error }` if OpenAI failed (details are in the server log).
 
+## MCP server
+
+`src/mcp.ts` is an [MCP](https://modelcontextprotocol.io) server (stdio) that lets an MCP client such as Claude Code use the app. On start it runs `npm run dev` itself unless the app already answers on `PORT`, and stops it when the client disconnects. Register it in a `.mcp.json` in the project root:
+
+```json
+{ "mcpServers": { "my-server": { "command": "node", "args": ["--import", "tsx", "src/mcp.ts"] } } }
+```
+
+(`npm run mcp` runs the same thing, but npm prints a banner to stdout, which breaks the protocol, so do not use it in `.mcp.json`.) Tools:
+
+| Tool              | Description                                                                                  |
+| ----------------- | -------------------------------------------------------------------------------------------- |
+| `list_snapshots`  | Saved files in `uploads/`, newest first (`limit`, default 20)                                |
+| `ask`             | Question to OpenAI via `POST /api/ask`, optionally with a saved `snapshot` file name         |
+| `get_prompts`     | Read `snapshot_prompt` and `text_prompt` from `prompts.json`                                 |
+| `set_prompts`     | Update either prompt                                                                         |
+
+Taking a new snapshot needs the camera in the browser, so it is not a tool. `ask` needs `OPENAI_API_KEY` on the app.
+
 ## Scripts
 
 | Script                 | Description                                  |
@@ -111,12 +130,14 @@ Sends a question to OpenAI. `text` and `image` (jpeg, png or webp data URL) are 
 | `npm run build`        | Build client and server                      |
 | `npm run build:client` | Compile `public/app.ts`                      |
 | `npm start`            | Run the compiled server from `dist/`         |
+| `npm run mcp`          | Run the MCP server (see "MCP server")        |
 | `npm run typecheck`    | Type-check server and client without output  |
 
 ## Project structure
 
 ```
 src/server.ts       Express server and upload endpoint
+src/mcp.ts          MCP server (stdio) that starts the app and exposes tools
 prompts.json        Snapshot and question prompts (loaded into the page, saved on edit)
 public/index.html   UI
 public/styles.css   Styles

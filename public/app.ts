@@ -80,7 +80,7 @@ function renderEntry(entry: HistoryEntry): HTMLLIElement {
   copy.title = "Copy this answer into the ask field";
   copy.addEventListener("click", () => useAsQuestion(entry.answer));
 
-  header.append(meta, copy);
+  header.append(meta);
   li.append(header);
 
   if (entry.kind === "question" && entry.title) {
@@ -94,6 +94,11 @@ function renderEntry(entry: HistoryEntry): HTMLLIElement {
   answer.className = "history-answer";
   answer.textContent = entry.answer;
   li.append(answer);
+
+  const footer = document.createElement("div");
+  footer.className = "history-footer";
+  footer.append(copy);
+  li.append(footer);
   return li;
 }
 
