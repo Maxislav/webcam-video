@@ -35,7 +35,7 @@ let crop: Crop | null = null;
 let selecting = false;
 let dragCrop: Crop | null = null;
 
-// One model answer. Kept in memory only: a page reload clears the list, together with the server-side context.
+// One model answer. Kept in memory only: a page reload clears the list.
 interface HistoryEntry {
   time: number;
   kind: "snapshot" | "question";
@@ -440,9 +440,6 @@ document.addEventListener("keydown", (event) => {
 });
 
 async function init(): Promise<void> {
-  // A page load starts a new conversation with the model.
-  void fetch("/api/reset-context", { method: "POST" }).catch(() => undefined);
-
   if (!navigator.mediaDevices?.getUserMedia) {
     placeholder.textContent = "Camera API unavailable";
     setStatus("getUserMedia requires HTTPS or localhost.", "error");

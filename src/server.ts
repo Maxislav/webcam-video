@@ -49,22 +49,10 @@ async function readPrompt(): Promise<string> {
   return DEFAULT_PROMPT;
 }
 
-interface ResponsesResult {
-  id?: string;
-  output?: { type: string; content?: { type: string; text?: string }[] }[];
-}
+type ContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
 
-// Id of the last stored response; passed as previous_response_id so OpenAI keeps the
-// conversation context. Lives in memory, so a server restart starts a new conversation.
-let previousResponseId: string | null = null;
-
-// Analyses run one at a time so each request chains onto the previous response.
-let analysisQueue: Promise<unknown> = Promise.resolve();
-
-type InputPart = { type: "input_text"; text: string } | { type: "input_image"; image_url: string };
-
-async function requestModel(content: InputPart[]): Promise<Analysis> {
-  const response = await fetch("https://api.openai.com/v1/responses", {
+async function requestModel(content: ContentPart[]): Promise<Analysis> {
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -72,9 +60,7 @@ async function requestModel(content: InputPart[]): Promise<Analysis> {
     },
     body: JSON.stringify({
       model: OPENAI_MODEL,
-      input: [{ role: "user", content }],
-      store: true,
-      ...(previousResponseId && { previous_response_id: previousResponseId }),
+      messages: [{ role: "user", content }],
     }),
     signal: AbortSignal.timeout(ANALYSIS_TIMEOUT_MS),
   });
@@ -84,58 +70,29 @@ async function requestModel(content: InputPart[]): Promise<Analysis> {
     throw new Error(`OpenAI ${response.status}: ${body?.error?.message ?? response.statusText}`);
   }
 
-  const data = (await response.json()) as ResponsesResult;
-  const text = (data.output ?? [])
-    .filter((item) => item.type === "message")
-    .flatMap((item) => item.content ?? [])
-    .filter((item) => item.type === "output_text")
-    .map((item) => item.text ?? "")
-    .join("\n")
-    .trim();
+  const data = (await response.json()) as { choices?: { message?: { content?: string } }[] };
+  const text = data.choices?.[0]?.message?.content?.trim();
   if (!text) throw new Error("OpenAI returned an empty response");
-
-  // Only advance the context after a successful answer.
-  if (data.id) previousResponseId = data.id;
   return { text, model: OPENAI_MODEL };
 }
 
-// Every request chains onto the previous response, so they run one at a time.
-function enqueue(task: () => Promise<Analysis>): Promise<Analysis> {
-  const run = analysisQueue.then(task);
-  analysisQueue = run.catch(() => undefined);
-  return run;
-}
-
-// Queued behind running requests so a late answer cannot restore the old context.
-function resetContext(): Promise<void> {
-  const run = analysisQueue.then(() => {
-    previousResponseId = null;
-  });
-  analysisQueue = run;
-  return run;
-}
-
 /**
- * Sends the saved snapshot to OpenAI (Responses API, vision) and returns the model's description.
- * Each answer is stored (`store: true`) and linked via `previous_response_id`, so later snapshots
- * and text questions are answered with the earlier ones as context.
+ * Sends the saved snapshot to OpenAI (vision) and returns the model's description.
  * Returns null when OPENAI_API_KEY is not set. Throws on API errors.
  */
-function analyzeSnapshot(imageBuffer: Buffer, mime: string): Promise<Analysis | null> {
-  if (!OPENAI_API_KEY) return Promise.resolve(null);
+async function analyzeSnapshot(imageBuffer: Buffer, mime: string): Promise<Analysis | null> {
+  if (!OPENAI_API_KEY) return null;
 
-  return enqueue(async () => {
-    const prompt = await readPrompt();
-    return requestModel([
-      { type: "input_text", text: prompt },
-      { type: "input_image", image_url: `data:${mime};base64,${imageBuffer.toString("base64")}` },
-    ]);
-  });
+  const prompt = await readPrompt();
+  return requestModel([
+    { type: "text", text: prompt },
+    { type: "image_url", image_url: { url: `data:${mime};base64,${imageBuffer.toString("base64")}` } },
+  ]);
 }
 
-// Text-only question in the same conversation as the snapshots. Throws on API errors.
+// Text-only question, answered independently of earlier snapshots. Throws on API errors.
 function askText(text: string): Promise<Analysis> {
-  return enqueue(() => requestModel([{ type: "input_text", text }]));
+  return requestModel([{ type: "text", text }]);
 }
 
 // YYYY-MM-DD_HH-mm-ss in server local time.
@@ -235,10 +192,6 @@ app.use(express.static(PUBLIC_DIR));
 
 app.post("/api/upload-snapshot", (req, res, next) => {
   uploadSnapshot(req, res).catch(next);
-});
-
-app.post("/api/reset-context", (_req, res, next) => {
-  resetContext().then(() => res.status(204).end(), next);
 });
 
 app.post("/api/ask", (req, res, next) => {
