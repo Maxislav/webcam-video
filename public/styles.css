@@ -171,7 +171,8 @@ button[hidden] {
   position: absolute;
   border: 2px solid var(--accent);
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
-  pointer-events: none;
+  cursor: move;
+  touch-action: none;
 }
 
 .selection[hidden] {

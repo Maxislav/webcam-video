@@ -57,7 +57,7 @@ When `OPENAI_API_KEY` is set, every saved snapshot (already cropped to the selec
 
 1. Open the app and allow camera access.
 2. Choose a camera in the **Video source** dropdown.
-3. (Optional) Click **Select area** and drag a rectangle over the preview. The area is remembered per camera (in the browser's `localStorage`), so you only do this once. `Esc` cancels; **Change area** redraws it; **Reset area** goes back to the full frame.
+3. (Optional) Click **Select area** and drag a rectangle over the preview. The area is remembered per camera (in the browser's `localStorage`), so you only do this once. `Esc` cancels; drag the frame itself to move it (it stays inside the video); **Change area** redraws it; **Reset area** goes back to the full frame.
 4. Click **Take Snapshot**, or press `Space` / `Enter`. If an area is selected, only that area is saved.
 5. The status line shows the saved file name. Images are stored in `uploads/` and named by the server's local time: `YYYY-MM-DD_HH-mm-ss.jpg` (e.g. `2026-11-09_14-30-05.jpg`). Snapshots taken within the same second get a `-1`, `-2`, … suffix.
 

@@ -159,6 +159,47 @@ selectLayer.addEventListener("pointercancel", () => {
   setSelecting(false);
 });
 
+// Moving an existing area: drag the frame itself.
+let moveStart: { point: { x: number; y: number }; origin: Crop } | null = null;
+
+selectionEl.addEventListener("pointerdown", (event) => {
+  if (selecting || !crop) return;
+  const point = pointToFrame(event);
+  if (!point) return;
+  moveStart = { point, origin: crop };
+  selectionEl.setPointerCapture(event.pointerId);
+});
+
+selectionEl.addEventListener("pointermove", (event) => {
+  if (!moveStart) return;
+  const point = pointToFrame(event);
+  if (!point) return;
+  const { origin } = moveStart;
+  dragCrop = {
+    ...origin,
+    x: Math.min(Math.max(origin.x + point.x - moveStart.point.x, 0), 1 - origin.width),
+    y: Math.min(Math.max(origin.y + point.y - moveStart.point.y, 0), 1 - origin.height),
+  };
+  renderCrop();
+});
+
+selectionEl.addEventListener("pointerup", () => {
+  if (!moveStart) return;
+  moveStart = null;
+  if (dragCrop) {
+    crop = dragCrop;
+    saveCrop();
+  }
+  dragCrop = null;
+  renderCrop();
+});
+
+selectionEl.addEventListener("pointercancel", () => {
+  moveStart = null;
+  dragCrop = null;
+  renderCrop();
+});
+
 selectBtn.addEventListener("click", () => setSelecting(!selecting));
 
 resetBtn.addEventListener("click", () => {
