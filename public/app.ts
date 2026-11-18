@@ -448,10 +448,12 @@ function firstImage(files: FileList | null | undefined): File | undefined {
 async function askQuestion(): Promise<void> {
   const typed = askInput.value.trim();
   if (asking || (!typed && !attachment)) return;
-  // An image without a question is asked with the snapshot prompt; the question prompt is appended to the end.
-  const base = typed || (attachment ? snapshotPromptInput.value.trim() : "");
-  const text = [base, askPromptInput.value.trim()].filter(Boolean).join("\n\n");
   const image = attachment;
+  // With an image only the snapshot prompt is sent (the typed text and question prompt are left out);
+  // otherwise the question prompt is appended to the end of the typed question.
+  const text = image
+    ? snapshotPromptInput.value.trim()
+    : [typed, askPromptInput.value.trim()].filter(Boolean).join("\n\n");
   asking = true;
   askBtn.disabled = true;
 
@@ -466,7 +468,8 @@ async function askQuestion(): Promise<void> {
     if (!response.ok) throw new Error(data.error ?? `Request failed (${response.status})`);
 
     addHistory({ kind: "question", title: text, answer: data.answer, withImage: !!image });
-    askInput.value = "";
+    // The typed text is kept when it was not sent along with an image.
+    if (!image) askInput.value = "";
     setAttachment(null);
     setStatus("");
   } catch (err) {
