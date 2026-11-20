@@ -1,6 +1,8 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
 
 try {
   process.loadEnvFile();
@@ -9,6 +11,9 @@ try {
 }
 
 const PORT = Number(process.env.PORT ?? 3000);
+// Base URL of the camera server (src/camera-server.ts). When set, the page shows its stream instead of a local browser camera.
+const CAMERA_URL = process.env.CAMERA_URL?.trim().replace(/\/+$/, "");
+const CAMERA_CONNECT_TIMEOUT_MS = 10_000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4.1";
 const DEFAULT_PROMPT = "Describe what is in the image.";
@@ -240,6 +245,39 @@ const app = express();
 app.use(express.json({ limit: "15mb" }));
 app.use(express.static(PUBLIC_DIR));
 
+app.get("/api/camera", (_req, res) => {
+  res.json({ remote: Boolean(CAMERA_URL) });
+});
+
+// Same-origin proxy of the camera server stream, so the page can draw frames to a canvas without CORS taint.
+app.get("/api/stream", async (_req, res) => {
+  if (!CAMERA_URL) {
+    res.status(404).json({ error: "CAMERA_URL is not set" });
+    return;
+  }
+  const abort = new AbortController();
+  res.on("close", () => abort.abort());
+  const connectTimer = setTimeout(() => abort.abort(), CAMERA_CONNECT_TIMEOUT_MS);
+  try {
+    const upstream = await fetch(`${CAMERA_URL}/stream`, { signal: abort.signal });
+    clearTimeout(connectTimer);
+    if (!upstream.ok || !upstream.body) {
+      res.status(502).json({ error: "Camera server unavailable" });
+      return;
+    }
+    res.setHeader("Content-Type", upstream.headers.get("content-type") ?? "multipart/x-mixed-replace; boundary=frame");
+    res.setHeader("Cache-Control", "no-store");
+    Readable.fromWeb(upstream.body as WebReadableStream)
+      .on("error", () => res.end())
+      .pipe(res);
+  } catch (err) {
+    clearTimeout(connectTimer);
+    if (!abort.signal.aborted || !res.headersSent) console.error("Camera stream proxy failed:", (err as Error).name);
+    if (res.headersSent) res.end();
+    else res.status(502).json({ error: "Camera server unavailable" });
+  }
+});
+
 app.get("/api/prompts", (_req, res, next) => {
   readPrompts().then((prompts) => res.json(prompts), next);
 });
@@ -278,4 +316,5 @@ app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: 
 
 app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
+  if (CAMERA_URL) console.log("Camera source: remote camera server");
 });

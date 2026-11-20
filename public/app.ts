@@ -1,4 +1,5 @@
 const video = document.getElementById("video") as HTMLVideoElement;
+const remoteVideo = document.getElementById("remoteVideo") as HTMLImageElement;
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const deviceSelect = document.getElementById("deviceSelect") as HTMLSelectElement;
 const snapshotBtn = document.getElementById("snapshotBtn") as HTMLButtonElement;
@@ -39,6 +40,24 @@ interface Crop {
 }
 
 let currentStream: MediaStream | null = null;
+// Remote mode: frames come from the camera server through /api/stream (shown in an <img>).
+let remote = false;
+let remoteLive = false;
+let remoteRetry: number | undefined;
+
+function frameSource(): HTMLVideoElement | HTMLImageElement {
+  return remote ? remoteVideo : video;
+}
+
+function frameSize(): { width: number; height: number } {
+  return remote
+    ? { width: remoteVideo.naturalWidth, height: remoteVideo.naturalHeight }
+    : { width: video.videoWidth, height: video.videoHeight };
+}
+
+function isLive(): boolean {
+  return remote ? remoteLive : currentStream !== null;
+}
 let uploading = false;
 let crop: Crop | null = null;
 let selecting = false;
@@ -125,6 +144,7 @@ function stopStream(): void {
 }
 
 function cropKey(): string | null {
+  if (remote) return CROP_KEY_PREFIX + "remote";
   const id = currentStream?.getVideoTracks()[0]?.getSettings().deviceId;
   return id ? CROP_KEY_PREFIX + id : null;
 }
@@ -157,8 +177,7 @@ function saveCrop(): void {
 
 // Area of the container actually covered by the video (object-fit: contain adds letterboxing).
 function videoContentRect(): { left: number; top: number; width: number; height: number } | null {
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
+  const { width: vw, height: vh } = frameSize();
   if (!vw || !vh) return null;
   const cw = container.clientWidth;
   const ch = container.clientHeight;
@@ -294,6 +313,43 @@ new ResizeObserver(renderCrop).observe(container);
 video.addEventListener("loadedmetadata", renderCrop);
 video.addEventListener("resize", renderCrop);
 
+function setRemoteLive(live: boolean): void {
+  remoteLive = live;
+  placeholder.hidden = live;
+  if (!live) placeholder.textContent = "Camera server unavailable, retrying…";
+  snapshotBtn.disabled = !live;
+  selectBtn.disabled = !live;
+  if (live) {
+    setStatus("");
+    crop = loadCrop();
+  }
+  renderCrop();
+}
+
+function connectRemote(): void {
+  window.clearTimeout(remoteRetry);
+  // Cache-buster: a fresh request per attempt, never a cached half-stream.
+  remoteVideo.src = `/api/stream?t=${Date.now()}`;
+}
+
+remoteVideo.addEventListener("load", () => setRemoteLive(true));
+remoteVideo.addEventListener("error", () => {
+  setRemoteLive(false);
+  remoteRetry = window.setTimeout(connectRemote, 3000);
+});
+
+function startRemote(): void {
+  remote = true;
+  video.hidden = true;
+  remoteVideo.hidden = false;
+  deviceSelect.replaceChildren(new Option("Remote camera (camera server)"));
+  deviceSelect.disabled = true;
+  snapshotBtn.disabled = true;
+  selectBtn.disabled = true;
+  setStatus("Connecting to camera server…", "loading");
+  connectRemote();
+}
+
 async function startStream(deviceId?: string): Promise<void> {
   stopStream();
   snapshotBtn.disabled = true;
@@ -318,9 +374,43 @@ async function startStream(deviceId?: string): Promise<void> {
   renderCrop();
 }
 
-async function populateDevices(): Promise<void> {
+const INTERNAL_CAMERA_RE = /integrated|built-?in|internal|facetime|virtual|obs/i;
+let knownCameraIds = new Set<string>();
+
+// Prefer an external USB camera over built-in/virtual ones.
+function pickUsbCamera(cameras: MediaDeviceInfo[]): MediaDeviceInfo | undefined {
+  return (
+    cameras.find((c) => /usb/i.test(c.label)) ??
+    cameras.find((c) => c.label && !INTERNAL_CAMERA_RE.test(c.label))
+  );
+}
+
+async function listCameras(): Promise<MediaDeviceInfo[]> {
   const devices = await navigator.mediaDevices.enumerateDevices();
-  const cameras = devices.filter((d) => d.kind === "videoinput");
+  return devices.filter((d) => d.kind === "videoinput");
+}
+
+async function onDeviceChange(): Promise<void> {
+  const before = knownCameraIds;
+  const added = (await listCameras()).filter((c) => !before.has(c.deviceId));
+  const track = currentStream?.getVideoTracks()[0];
+  const lost = !track || track.readyState === "ended";
+  await populateDevices();
+
+  if (added.length > 0) {
+    // A camera was plugged in: switch to it right away.
+    const target = pickUsbCamera(added) ?? added[0];
+    await switchDevice(target.deviceId);
+  } else if (lost) {
+    // The active camera was unplugged: fall back to whatever is available.
+    localStorage.removeItem(STORAGE_KEY);
+    await switchDevice();
+  }
+}
+
+async function populateDevices(): Promise<void> {
+  const cameras = await listCameras();
+  knownCameraIds = new Set(cameras.map((c) => c.deviceId));
   const activeId = currentStream?.getVideoTracks()[0]?.getSettings().deviceId;
 
   deviceSelect.replaceChildren(
@@ -375,7 +465,8 @@ async function switchDevice(deviceId?: string): Promise<void> {
 }
 
 async function takeSnapshot(): Promise<void> {
-  if (uploading || !currentStream || video.videoWidth === 0) return;
+  const { width: fw, height: fh } = frameSize();
+  if (uploading || !isLive() || fw === 0) return;
   uploading = true;
   snapshotBtn.disabled = true;
 
@@ -384,13 +475,13 @@ async function takeSnapshot(): Promise<void> {
   flash.classList.add("active");
 
   try {
-    const sx = crop ? Math.round(crop.x * video.videoWidth) : 0;
-    const sy = crop ? Math.round(crop.y * video.videoHeight) : 0;
-    const sw = crop ? Math.min(Math.round(crop.width * video.videoWidth), video.videoWidth - sx) : video.videoWidth;
-    const sh = crop ? Math.min(Math.round(crop.height * video.videoHeight), video.videoHeight - sy) : video.videoHeight;
+    const sx = crop ? Math.round(crop.x * fw) : 0;
+    const sy = crop ? Math.round(crop.y * fh) : 0;
+    const sw = crop ? Math.min(Math.round(crop.width * fw), fw - sx) : fw;
+    const sh = crop ? Math.min(Math.round(crop.height * fh), fh - sy) : fh;
     canvas.width = sw;
     canvas.height = sh;
-    canvas.getContext("2d")!.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+    canvas.getContext("2d")!.drawImage(frameSource(), sx, sy, sw, sh, 0, 0, sw, sh);
     const image = canvas.toDataURL("image/jpeg", 0.92);
 
     setStatus("Uploading and analyzing…", "loading");
@@ -413,7 +504,7 @@ async function takeSnapshot(): Promise<void> {
     setStatus(err instanceof Error ? err.message : "Upload failed", "error");
   } finally {
     uploading = false;
-    snapshotBtn.disabled = !currentStream;
+    snapshotBtn.disabled = !isLive();
   }
 }
 
@@ -597,20 +688,36 @@ for (const [key, input] of PROMPT_FIELDS) autosavePrompt(key, input);
 async function init(): Promise<void> {
   void loadPrompts();
 
+  const config = await fetch("/api/camera")
+    .then((r) => r.json() as Promise<{ remote?: boolean }>)
+    .catch(() => ({}) as { remote?: boolean });
+  if (config.remote) {
+    startRemote();
+    return;
+  }
+
   if (!navigator.mediaDevices?.getUserMedia) {
     placeholder.textContent = "Camera API unavailable";
     setStatus("getUserMedia requires HTTPS or localhost.", "error");
     return;
   }
 
-  navigator.mediaDevices.addEventListener("devicechange", () => void populateDevices());
+  navigator.mediaDevices.addEventListener("devicechange", () => void onDeviceChange());
 
   // Permission must be granted before enumerateDevices() exposes device labels.
-  await switchDevice(localStorage.getItem(STORAGE_KEY) ?? undefined);
-  if (!currentStream && localStorage.getItem(STORAGE_KEY)) {
+  const saved = localStorage.getItem(STORAGE_KEY) ?? undefined;
+  await switchDevice(saved);
+  if (!currentStream && saved) {
     // Saved device may have disappeared; fall back to the default camera.
     localStorage.removeItem(STORAGE_KEY);
     await switchDevice();
+  }
+
+  if (!saved && currentStream) {
+    // First run: labels are known now, so prefer a USB camera over the default one.
+    const usb = pickUsbCamera(await listCameras());
+    const activeId = currentStream.getVideoTracks()[0]?.getSettings().deviceId;
+    if (usb && usb.deviceId !== activeId) await switchDevice(usb.deviceId);
   }
 }
 

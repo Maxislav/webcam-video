@@ -69,7 +69,8 @@ select {
   border-radius: 12px;
 }
 
-.camera-container video {
+.camera-container video,
+.camera-container img#remoteVideo {
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -365,4 +366,8 @@ textarea {
   button {
     width: 100%;
   }
+}
+
+.camera-container img#remoteVideo[hidden] {
+  display: none;
 }

@@ -10,6 +10,8 @@
     "build": "npm run build:client && npm run build:server",
     "dev": "npm run build:client && tsx watch src/server.ts",
     "mcp": "tsx src/mcp.ts",
+    "camera": "tsx src/camera-server.ts",
+    "start:camera": "node dist/camera-server.js",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p public/tsconfig.json --noEmit"
   },

@@ -40,10 +40,27 @@ npm start
 | `PORT`           | `3000`        | Port the server uses                                            |
 | `OPENAI_API_KEY` | (unset)       | Enables image analysis with OpenAI; without it nothing is sent  |
 | `OPENAI_MODEL`   | `gpt-4o-mini` | Vision-capable OpenAI model used for analysis                   |
+| `CAMERA_URL`     | (unset)       | Camera server address (e.g. `http://192.168.1.5:3001`); when set, the page shows its stream instead of the browser camera |
 
 Example: `PORT=8080 npm start`
 
 Variables can also be put in a `.env` file in the project root (it is gitignored), e.g. `OPENAI_API_KEY=sk-...`. Restart the server after changing it.
+
+## Camera server (remote camera)
+
+`src/camera-server.ts` is a separate server that captures a USB camera with [ffmpeg](https://ffmpeg.org) (must be installed) and streams it as MJPEG. Run it on the machine the camera is plugged into: `npm run camera` (or `npm run build && npm run start:camera`). Then start the main app with `CAMERA_URL` pointing at it (`CAMERA_URL=http://localhost:3001 npm run dev`). The main server proxies the stream at `GET /api/stream`, and the page shows it instead of the browser camera (`GET /api/camera` tells the page which mode to use); crop, snapshots and analysis work the same. Without `CAMERA_URL` nothing changes.
+
+| Variable         | Default            | Description                                                                 |
+| ---------------- | ------------------ | --------------------------------------------------------------------------- |
+| `CAMERA_PORT`    | `3001`             | Port of the camera server                                                   |
+| `CAMERA_HOST`    | `127.0.0.1`        | Bind address; the stream has no authentication, use `0.0.0.0` only on a trusted network |
+| `CAMERA_DEVICE`  | auto (Linux)       | Linux: `/dev/videoN` (default: first USB capture node); Windows: camera name for dshow (`ffmpeg -list_devices true -f dshow -i dummy`); macOS: avfoundation index |
+| `CAMERA_SIZE`    | `1280x720`         | Capture resolution (Linux/Windows)                                          |
+| `CAMERA_FPS`     | `15`               | Frame rate                                                                  |
+| `CAMERA_QUALITY` | `4`                | JPEG quality for ffmpeg `-q:v` (2 best .. 31 worst)                         |
+| `FFMPEG_PATH`    | `ffmpeg`           | ffmpeg binary                                                               |
+
+Endpoints: `GET /stream` (multipart MJPEG), `GET /snapshot` (one JPEG), `GET /health`. ffmpeg runs only while someone is watching (it stops 5 s after the last viewer leaves) and restarts every 2 s if the camera disappears. Under WSL2 USB cameras are not visible; run the camera server on Windows (set `CAMERA_HOST=0.0.0.0`) or attach the camera with usbipd-win.
 
 ## Image analysis (OpenAI)
 
