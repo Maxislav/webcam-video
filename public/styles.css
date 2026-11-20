@@ -50,7 +50,8 @@ label {
   color: var(--muted);
 }
 
-select {
+select,
+input[type="url"] {
   padding: 10px 12px;
   font-size: 1rem;
   color: var(--field-text);
@@ -368,6 +369,7 @@ textarea {
   }
 }
 
+.camera-container video[hidden],
 .camera-container img#remoteVideo[hidden] {
   display: none;
 }

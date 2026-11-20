@@ -13,6 +13,7 @@ try {
 const PORT = Number(process.env.PORT ?? 3000);
 // Base URL of the camera server (src/camera-server.ts). When set, the page shows its stream instead of a local browser camera.
 const CAMERA_URL = process.env.CAMERA_URL?.trim().replace(/\/+$/, "");
+const DEFAULT_STREAM_URL = CAMERA_URL ? `${CAMERA_URL}/stream` : undefined;
 const CAMERA_CONNECT_TIMEOUT_MS = 10_000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4.1";
@@ -245,13 +246,46 @@ const app = express();
 app.use(express.json({ limit: "15mb" }));
 app.use(express.static(PUBLIC_DIR));
 
+// Accepts a full stream address; a bare server address (no path) gets /stream appended.
+function parseStreamUrl(raw: string): string | null {
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    if (url.pathname === "/" && !url.search) url.pathname = "/stream";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function isLoopback(req: Request): boolean {
+  const ip = req.socket.remoteAddress ?? "";
+  return ip === "::1" || ip === "127.0.0.1" || ip === "::ffff:127.0.0.1";
+}
+
 app.get("/api/camera", (_req, res) => {
-  res.json({ remote: Boolean(CAMERA_URL) });
+  res.json({ remote: Boolean(CAMERA_URL), url: DEFAULT_STREAM_URL });
 });
 
-// Same-origin proxy of the camera server stream, so the page can draw frames to a canvas without CORS taint.
-app.get("/api/stream", async (_req, res) => {
-  if (!CAMERA_URL) {
+// Same-origin proxy of the camera stream, so the page can draw frames to a canvas without CORS taint.
+// The page may override the address with ?url=; the server listens on all interfaces, so only loopback
+// clients may do that (otherwise anyone on the network could use this as an HTTP proxy).
+app.get("/api/stream", async (req, res) => {
+  let target = DEFAULT_STREAM_URL;
+  const override = typeof req.query.url === "string" ? req.query.url.trim() : "";
+  if (override) {
+    if (!isLoopback(req)) {
+      res.status(403).json({ error: "Changing the stream address is allowed only from this machine" });
+      return;
+    }
+    const parsed = parseStreamUrl(override);
+    if (!parsed) {
+      res.status(400).json({ error: "Stream address must be an http(s) URL" });
+      return;
+    }
+    target = parsed;
+  }
+  if (!target) {
     res.status(404).json({ error: "CAMERA_URL is not set" });
     return;
   }
@@ -259,7 +293,7 @@ app.get("/api/stream", async (_req, res) => {
   res.on("close", () => abort.abort());
   const connectTimer = setTimeout(() => abort.abort(), CAMERA_CONNECT_TIMEOUT_MS);
   try {
-    const upstream = await fetch(`${CAMERA_URL}/stream`, { signal: abort.signal });
+    const upstream = await fetch(target, { signal: abort.signal });
     clearTimeout(connectTimer);
     if (!upstream.ok || !upstream.body) {
       res.status(502).json({ error: "Camera server unavailable" });

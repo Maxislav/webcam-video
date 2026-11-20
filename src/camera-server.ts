@@ -2,10 +2,13 @@ import express, { type Response } from "express";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 
-try {
-  process.loadEnvFile();
-} catch {
-  // No .env file; rely on the real environment.
+// .env.camera is camera-server only and wins over the shared .env (loadEnvFile never overrides set variables).
+for (const file of [".env.camera", ".env"]) {
+  try {
+    process.loadEnvFile(file);
+  } catch {
+    // File missing; rely on the next file or the real environment.
+  }
 }
 
 // Camera server: captures a local (USB) camera with ffmpeg and streams it as MJPEG over HTTP.

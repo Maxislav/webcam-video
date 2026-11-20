@@ -2,6 +2,8 @@ const video = document.getElementById("video") as HTMLVideoElement;
 const remoteVideo = document.getElementById("remoteVideo") as HTMLImageElement;
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const deviceSelect = document.getElementById("deviceSelect") as HTMLSelectElement;
+const deviceLabel = document.getElementById("deviceLabel") as HTMLLabelElement;
+const streamUrlInput = document.getElementById("streamUrl") as HTMLInputElement;
 const snapshotBtn = document.getElementById("snapshotBtn") as HTMLButtonElement;
 const statusEl = document.getElementById("status") as HTMLParagraphElement;
 const placeholder = document.getElementById("placeholder") as HTMLParagraphElement;
@@ -23,6 +25,7 @@ const selectionEl = document.getElementById("selection") as HTMLDivElement;
 const selectLayer = document.getElementById("selectLayer") as HTMLDivElement;
 
 const STORAGE_KEY = "webcam-video:deviceId";
+const STREAM_URL_KEY = "webcam-video:streamUrl";
 const CROP_KEY_PREFIX = "webcam-video:crop:";
 const MAX_HISTORY = 100;
 const ATTACHMENT_TYPES = ["image/jpeg", "image/png", "image/webp"];
@@ -44,6 +47,9 @@ let currentStream: MediaStream | null = null;
 let remote = false;
 let remoteLive = false;
 let remoteRetry: number | undefined;
+// Stream address shown in the editable field; defaultStreamUrl comes from the server (CAMERA_URL).
+let defaultStreamUrl = "";
+let streamUrl = "";
 
 function frameSource(): HTMLVideoElement | HTMLImageElement {
   return remote ? remoteVideo : video;
@@ -328,9 +334,46 @@ function setRemoteLive(live: boolean): void {
 
 function connectRemote(): void {
   window.clearTimeout(remoteRetry);
+  // The default address is not sent: the server already knows it (and may refuse overrides from other machines).
+  const override = streamUrl && streamUrl !== defaultStreamUrl ? `url=${encodeURIComponent(streamUrl)}&` : "";
   // Cache-buster: a fresh request per attempt, never a cached half-stream.
-  remoteVideo.src = `/api/stream?t=${Date.now()}`;
+  remoteVideo.src = `/api/stream?${override}t=${Date.now()}`;
 }
+
+function loadStreamUrl(): string {
+  try {
+    const saved = localStorage.getItem(STREAM_URL_KEY) ?? "";
+    return /^https?:\/\/\S+$/i.test(saved) ? saved : "";
+  } catch {
+    return "";
+  }
+}
+
+// Applies the address typed into the field (empty = back to the server default) and reconnects.
+function applyStreamUrl(): void {
+  const typed = streamUrlInput.value.trim();
+  const value = typed || defaultStreamUrl;
+  if (!/^https?:\/\/\S+$/i.test(value)) {
+    setStatus("Stream address must start with http:// or https://", "error");
+    return;
+  }
+  streamUrlInput.value = value;
+  // Whatever the user entered is remembered, even if it equals the default; an empty field forgets it.
+  try {
+    if (typed) localStorage.setItem(STREAM_URL_KEY, typed);
+    else localStorage.removeItem(STREAM_URL_KEY);
+  } catch {
+    // Storage unavailable; the address just won't survive a reload.
+  }
+  if (value === streamUrl) return;
+  streamUrl = value;
+  setRemoteLive(false);
+  placeholder.textContent = "Connecting…";
+  setStatus("Connecting to the stream…", "loading");
+  connectRemote();
+}
+
+streamUrlInput.addEventListener("change", applyStreamUrl);
 
 remoteVideo.addEventListener("load", () => setRemoteLive(true));
 remoteVideo.addEventListener("error", () => {
@@ -338,12 +381,17 @@ remoteVideo.addEventListener("error", () => {
   remoteRetry = window.setTimeout(connectRemote, 3000);
 });
 
-function startRemote(): void {
+function startRemote(serverUrl: string): void {
   remote = true;
+  defaultStreamUrl = serverUrl;
+  streamUrl = loadStreamUrl() || serverUrl;
   video.hidden = true;
   remoteVideo.hidden = false;
-  deviceSelect.replaceChildren(new Option("Remote camera (camera server)"));
-  deviceSelect.disabled = true;
+  deviceSelect.hidden = true;
+  streamUrlInput.hidden = false;
+  streamUrlInput.value = streamUrl;
+  deviceLabel.htmlFor = "streamUrl";
+  deviceLabel.textContent = "Stream address";
   snapshotBtn.disabled = true;
   selectBtn.disabled = true;
   setStatus("Connecting to camera server…", "loading");
@@ -689,10 +737,10 @@ async function init(): Promise<void> {
   void loadPrompts();
 
   const config = await fetch("/api/camera")
-    .then((r) => r.json() as Promise<{ remote?: boolean }>)
-    .catch(() => ({}) as { remote?: boolean });
+    .then((r) => r.json() as Promise<{ remote?: boolean; url?: string }>)
+    .catch(() => ({}) as { remote?: boolean; url?: string });
   if (config.remote) {
-    startRemote();
+    startRemote(config.url ?? "");
     return;
   }
 

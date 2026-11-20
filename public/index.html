@@ -16,10 +16,11 @@
     </div>
 
     <div class="field">
-      <label for="deviceSelect">Video source</label>
+      <label id="deviceLabel" for="deviceSelect">Video source</label>
       <select id="deviceSelect" disabled>
         <option>Loading devices…</option>
       </select>
+      <input id="streamUrl" type="url" hidden spellcheck="false" autocomplete="off" placeholder="http://127.0.0.1:3001/stream">
     </div>
 
     <div class="stage">
